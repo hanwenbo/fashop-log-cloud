@@ -44,7 +44,7 @@ class LogCloud {
 		$get     = $request->get();
 		$post    = $request->post();
 		if (strlen(json_encode($post)) > 20000) {
-			$post = "长度大于20000太长，有可能是图片或附件或长文本，不记录";
+			$post["notice"] = "长度大于20000太长，有可能是图片或附件或长文本，不记录";
 		}
 		$ip = $_SERVER['REMOTE_ADDR'];
 
@@ -113,85 +113,40 @@ class LogCloud {
 			$json_data['remote']     = $remote;
 			$json_data['method']     = $method;
 			$json_data['uri']        = $uri;
-			$json_data               = array_merge($json_data, $message);
+
+			$json_data = array_merge($json_data, $message);
 			if (!empty($json_data['api_return'])) {
 				$json_data['api_return'] = $json_data['api_return'][0];
 			}
 			$this->writed[$destination] = true;
 		}
-
+		// 断开客户端请求，提高访问速度
+		fastcgi_finish_request();
 		// 是否提交到云端
-		$config = config('wenshuai_log_cloud');
+		$config = config('fashop_log_cloud');
 		if ($config['open'] === true) {
-			$id = time();
-			foreach ($log_cloud_cofing['hosts'] as $host) {
-				$this->ajax($host, "/{$config['index']}/{$config['type']}/{$id}", $json_data, 'PUT');
-			}
+			$client  = new \GuzzleHttp\Client();
+			$url     = "{$config['host']}{$config['index']}/{$config['type']}/" . time();
+			$header  = ['Authorization' => "Basic " . base64_encode("{$config['username']}:{$config['password']}"), 'Content-Type' => "application/json"];
+			$request = new \GuzzleHttp\Psr7\Request('PUT', $url, $header, json_encode([
+				'current_uri' => $json_data['current_uri'],
+				'time_str'    => $json_data['time_str'],
+				'get'         => $json_data['get'],
+				'post'        => $json_data['post'],
+				'now'         => $json_data['now'],
+				'server'      => $json_data['server'],
+				'remote'      => $json_data['remote'],
+				'method'      => $json_data['method'],
+				'uri'         => $json_data['uri'],
+				'header'      => $json_data['header'],
+			]));
+			$promise = $client->sendAsync($request)->then(function ($response) {
+				// $response->getBody();
+			});
+			$promise->wait(false);
 		}
 
 		$message = json_encode($json_data) . "\r\n";
 		return error_log($message, 3, $destination);
-	}
-	/**
-	 * 异步请求
-	 * @param string $domain 域名
-	 * @param string $path 深层地址
-	 * 比如：www.fashop.cn/hanwenbo/module/controller/action，hanwenbo/controller/action这部分就是path要带入的内容，默认为/
-	 * 由于文件夹名字是会变的，写法参考：__ROOT__+你的path，（__ROOT__ = /hanwenbo）
-	 * @param array $query_param 请求地址的附加参数，如：array('page'=>1,'rows'=>5)
-	 * @param string $method 请求方式，GET | POST
-	 * @param string $port 端口号，默认80
-	 * @param string $header_param 头部参数，比如异步请求自己的服务，可加一些验证参数去限制被请求的来源 如：array('access_token'=>'hanwenbo')
-	 * @example 示例：ajax( $_SERVER['SERVER_NAME'] ,__ROOT__.'/Home/index/test',array('param'=>1),'GET',80,array('access_token'=>'hanwenbo'));
-	 * @author 韩文博
-	 */
-	private function ajax($host = 'www.fashop.cn', $path = '/', $query_param = array(), $method = 'GET', $port = 80, $header_param = array()) {
-		// 请求的头部
-		$header_string = '';
-		if (!empty($header_param)) {
-			foreach ($header_param as $key => $value) {
-				$header_string .= $key . ": " . $value . "\r\n";
-			}
-		}
-		// 尝试连接
-		$fp = fsockopen($host, $port, $errno, $errstr, 30);
-		if (!$fp) {
-			trace($errstr, 'fashop\log\cloud->ajax()失败');
-		} else {
-			switch (strtolower($method)) {
-			case 'post':
-				$post = http_build_query($query_param);
-				$out  = "POST " . $path . " HTTP/1.1\r\n";
-				$out .= "Content-Type: application/x-www-form-urlencoded\r\n";
-				$out .= "Host: $host\r\n";
-				$out .= $header_string;
-				$out .= 'Content-Length: ' . strlen($post) . "\r\n";
-				$out .= "Connection: Close\r\n\r\n";
-				$out .= $post;
-				break;
-			case 'put':
-				$post = http_build_query($query_param);
-				$out  = "PUT " . $path . " HTTP/1.1\r\n";
-				$out .= "Content-Type: application/x-www-form-urlencoded\r\n";
-				$out .= "Host: $host\r\n";
-				$out .= $header_string;
-				$out .= 'Content-Length: ' . strlen($post) . "\r\n";
-				$out .= "Connection: Close\r\n\r\n";
-				$out .= $post;
-				break;
-			default:
-				$query_data   = http_build_query($query_param);
-				$query_data   = $query_data ? '?' . $query_data : '';
-				$query_string = (strpos($path, '/') == 0 ? $path : '/' . $path) . $query_data;
-
-				$out = "GET " . $query_string . " HTTP/1.1\r\n";
-				$out .= "Host: " . $host . "\r\n";
-				$out .= $header_string;
-				$out .= "Connection: Close\r\n\r\n";
-				break;
-			}
-			fwrite($fp, $out);
-			fclose($fp);
-		}
 	}
 }
